@@ -18,7 +18,10 @@ from __future__ import division
 from __future__ import print_function
 
 import itertools
+import os
+import tempfile
 import torch
+import torch.nn.functional as F
 import unittest
 import numpy as np
 
@@ -650,3 +653,68 @@ class TorchTests(unittest.TestCase):
             self.assertLess(err, 0.00000001,
                             "gradient %s differs from expected %s, "
                             "error: %s" % (grad_out, expected, str(err)))
+
+    def test_broadcast_state(self):
+        hvd.init()
+
+        N, D_in, H, D_out = 64, 100, 10, 10
+        x = torch.autograd.Variable(torch.randn(N, D_in), requires_grad=True)
+        y = torch.autograd.Variable(torch.randn(N, D_out), requires_grad=False)
+
+        def create_model():
+            model = torch.nn.Sequential(
+                torch.nn.Linear(D_in, H),
+                torch.nn.ReLU(),
+                torch.nn.Linear(H, D_out),
+            )
+
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+            optimizer = hvd.DistributedOptimizer(
+                optimizer, named_parameters=model.named_parameters())
+
+            return model, optimizer
+
+        def get_model_param_value(model):
+            return model.state_dict()['0.weight'].clone()
+
+        def get_optimizer_param_value(optimizer):
+            state_dict = optimizer.state_dict()
+            param_id = state_dict['param_groups'][0]['params'][0]
+            return state_dict['state'][param_id]['momentum_buffer'].clone()
+
+        model, optimizer = create_model()
+        y_pred = model(x)
+        loss = F.mse_loss(y_pred, y, size_average=False)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        model_param_value = get_model_param_value(model)
+        hvd.broadcast_(model_param_value, root_rank=0)
+
+        opt_param_value = get_optimizer_param_value(optimizer)
+        hvd.broadcast_(opt_param_value, root_rank=0)
+
+        if hvd.rank() == 0:
+            state = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }
+            _, fname = tempfile.mkstemp('.pt')
+            torch.save(state, fname)
+
+        model, optimizer = create_model()
+        if hvd.rank() == 0:
+            checkpoint = torch.load(fname)
+            model.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            os.remove(fname)
+
+        hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+        model_param_value_after = get_model_param_value(model)
+        self.assertTrue((model_param_value == model_param_value_after).all())
+
+        hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+        self.assertEqual(len(optimizer.state_dict()['state'].values()), 4)
+        opt_param_value_after = get_optimizer_param_value(optimizer)
+        self.assertTrue((opt_param_value == opt_param_value_after).all())
