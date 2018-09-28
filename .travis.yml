@@ -36,10 +36,12 @@ before_install:
     fi
   # install necessary network tools
   - docker exec ${CONTAINER} /bin/sh -c "apt-get install -y wget openssh-client git"
+  # install `future` package until https://github.com/pytorch/pytorch/issues/11995 is resolved
+  - docker exec ${CONTAINER} /bin/sh -c "pip install future"
 
 env:
   matrix:
-    - TF_PACKAGE=tensorflow==1.1.0 KERAS_PACKAGE=keras==2.0.0 PYTORCH_PACKAGE=torch==0.3.1 MPI=OpenMPI
+    - TF_PACKAGE=tensorflow==1.1.0 KERAS_PACKAGE=keras==2.0.0 PYTORCH_PACKAGE=torch==0.4.0 MPI=OpenMPI
     - TF_PACKAGE=tensorflow==1.6.0 KERAS_PACKAGE=keras==2.1.2 PYTORCH_PACKAGE=torch==0.4.0 MPI=OpenMPI
     - TF_PACKAGE=tensorflow==1.9.0 KERAS_PACKAGE=keras==2.2.2 PYTORCH_PACKAGE=torch==0.4.1 MPI=OpenMPI
     - TF_PACKAGE=tf-nightly KERAS_PACKAGE=git+https://github.com/keras-team/keras.git PYTORCH_PACKAGE=torch-nightly MPI=OpenMPI
@@ -86,7 +88,7 @@ install:
     if [[ ${PYTORCH_PACKAGE} == "torch-nightly" ]]; then
       docker exec ${CONTAINER} /bin/sh -c "pip install torchvision"
       docker exec ${CONTAINER} /bin/sh -c "pip uninstall -y torch"
-      docker exec ${CONTAINER} /bin/sh -c "pip install torch_nightly -v -f https://download.pytorch.org/whl/nightly/cu90/torch_nightly.html"
+      docker exec ${CONTAINER} /bin/sh -c "pip install torch_nightly -v -f https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html"
     else
       docker exec ${CONTAINER} /bin/sh -c "pip install ${PYTORCH_PACKAGE} torchvision"
     fi
